@@ -33,7 +33,7 @@ using namespace std;
 using namespace cv;
 
 namespace {
-const char* about = "Basic marker detection";
+const char* about = "ArUco based landing";
 const char* keys  = 
         "{d        |       | dictionary: DICT_4X4_50=0, DICT_4X4_100=1, DICT_4X4_250=2,"
         "DICT_4X4_1000=3, DICT_5X5_50=4, DICT_5X5_100=5, DICT_5X5_250=6, DICT_5X5_1000=7, "
@@ -50,14 +50,22 @@ const char* keys  =
         "CORNER_REFINE_CONTOUR=2, CORNER_REFINE_APRILTAG=3}";
 }
 
+// Debug.
 float xTestVar=0.0f, yTestVar=0.0f, zTestVar=0.0f;
 
+// Side of the marker, hyperparameter!
 float sideOfTheMarker = 0.2;
 double halfOfTheSideOfTheMarker = sideOfTheMarker/2;
 
+// OpenGL light info
 GLfloat mat_specular[] = {1.0, 1.0,1.0,1.0};
 GLfloat mat_shininess[] = {50.0};
 GLfloat light_position[] = {1.0,1.0,1.0,0.0};
+
+int limitPoints = 7;  // Store limit, change to desired. 
+list<Point3d> points; // Container for points. List is used because easy to add and removal from both sides.
+Point3d normalizedCoord; // Only normalized version will be drawn in OpenGL. If no marker detected, draw the last point.
+
 
 void resize(int w, int h)
 {
@@ -70,7 +78,7 @@ void resize(int w, int h)
         glOrtho(-2.0*w/h,2.0*w/h,-2.0,2.0,-10.0,10.0);
     glMatrixMode(GL_MODELVIEW);
 }
-
+// Find the mat type. Give the object.type() to use. For debug.
 string type2str(int type) {
   string r;
 
@@ -95,7 +103,7 @@ string type2str(int type) {
 }
 
 
-
+// Draw OpenGL scene.
 void draw(double x,double y,double z){
     glPushAttrib(GL_ALL_ATTRIB_BITS);
     glPushMatrix();
@@ -107,9 +115,10 @@ void draw(double x,double y,double z){
 
     // gluLookAt(2,3,2,0,0,0,0,0,1);
     // gluLookAt(0,0,3,0,0,0,0,0,1);
-    gluLookAt(1,2,1,0,0,0,0,0,1);
+    gluLookAt(1,2,1,0,0,0,0,0,1); // Perspective
     glPointSize(5.0);
 
+    // Draw xyz axis so you can know where you are
     glBegin(GL_LINES);
     // draw line for x axis
     glColor3f(1.0, 0.0, 0.0);
@@ -125,10 +134,10 @@ void draw(double x,double y,double z){
     glVertex3f(0.0, 0.0, 1.0);
     glEnd();
 
+    // Draw the desired point.
     glBegin(GL_POINTS);
-    glColor3ub(180,180,180);
+    glColor3ub(180,180,180); // Almost white
     glVertex3d(x, y, z);
-    //cout << "printed point: " << x << "  " << y << "  " << z << endl;
     glEnd();
 
     glFlush();
@@ -138,10 +147,8 @@ void draw(double x,double y,double z){
     glPopAttrib();
 }
 
-int counterPoints = 0;
-int limitPoints = 5;
-list<Point3d> points;
-Point3d normalizedCoord;
+
+
 
 // Get Mat from 3D vector. 
 cv::Mat DoubleMatFromVec3d(cv::Vec3d in)
@@ -154,15 +161,8 @@ cv::Mat DoubleMatFromVec3d(cv::Vec3d in)
     return mat;
 };
 
-// TODO: REMOVAL
-void inversePerspective(Mat rvec, Mat tvec, Mat& camRvec, Mat& camTvec){
-    Mat R;
-    Rodrigues(rvec, R);
-    R = R.t();
-    camTvec = -R*tvec;
-    Rodrigues(R, camRvec);
-}
 
+// Sorts ids and corners ( since they are paralel arrays )
 void sortByIds(vector< vector< Point2f > >& corners, vector< int >& ids){
     bool swapped = true;
 
@@ -186,6 +186,7 @@ void sortByIds(vector< vector< Point2f > >& corners, vector< int >& ids){
 
 }
 
+// Given rotation matrix ( calculate with Rodrigues from rvec ), calculates euler angles;
 void getEulerAngles(Mat &rotCamerMatrix,Vec3d &eulerAngles){
 
     Mat cameraMatrix,rotMatrix,transVect,rotMatrixX,rotMatrixY,rotMatrixZ;
@@ -204,10 +205,7 @@ void getEulerAngles(Mat &rotCamerMatrix,Vec3d &eulerAngles){
                                eulerAngles);
 }
 
-double euclideanDistance(double xdiff, double ydiff, double zdiff){
-    return sqrt(xdiff*xdiff + ydiff*ydiff + zdiff*zdiff);
-}
-
+// Create Homogeneous form for rvec and tvec.
 cv::Mat getRTMatrix ( const cv::Mat &R_,const cv::Mat &T_ ,int forceType ) {
    cv::Mat M;
    cv::Mat R,T;
@@ -251,29 +249,32 @@ cv::Mat getRTMatrix ( const cv::Mat &R_,const cv::Mat &T_ ,int forceType ) {
 
 
 int main(int argc, char **argv){
-    // camera calibration matrix and distortion coefficients
+    // camera calibration matrix and distortion coefficients. Filled below, you put your camera values.
     cv::Mat cameraMatrix = cv::Mat(3,3, CV_64F);
     cv::Mat distCoeffs = cv::Mat(1,4, CV_64F);
     cv::Mat rotationMatrix = cv::Mat(3,3, CV_64F);
     cv::Mat translationVector = cv::Mat(1,3, CV_64F);
 
+    int width = 640, height = 480; // Change as you desire, care that most of the cameras are not supporting all ratios!
+
+    // OpenGL initiation part!
     SDL_Init(SDL_INIT_VIDEO);
     atexit(SDL_Quit);
     SDL_WM_SetCaption("Point Cloud", NULL);
-    SDL_SetVideoMode(640,480, 32, SDL_OPENGL);
-
+    SDL_SetVideoMode(width,height, 32, SDL_OPENGL); // 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     gluPerspective(70,(double)640/480,1,1000);
 
     // camera
-    VideoCapture cap(0);
+    VideoCapture cap(1);
 
-    int width = 640, height = 480;
-
+    
+    // Set the resolution. Camera should support the resolution and you need to multiply your camera matrix with the ratio. 
     cap.set(CV_CAP_PROP_FRAME_WIDTH,width);
     cap.set(CV_CAP_PROP_FRAME_HEIGHT,height);
 
+    /*********************************CAMERA CALIBRATION PARAMETERS********************************************/
     /*
     //Yasin lap top camera
     cameraMatrix.at<double>(0,0) = 5.6010964821423499e+02; 
@@ -359,8 +360,10 @@ int main(int argc, char **argv){
     distCoeffs.at<double>(0,2) = 0.;
     distCoeffs.at<double>(0,3) = 0.;
     distCoeffs.at<double>(0,4) = -3.0666278646347642e+00;
+    /*****************************************************************************/
 
-    /*
+
+    /*   If you changed your resolution, you need to multiply your camera matrix with the ratio!
     cameraMatrix.at<double>(0,0) = cameraMatrix.at<double>(0,0) * (width / 640);
     cameraMatrix.at<double>(0,1) = cameraMatrix.at<double>(0,1)  * (width / 640);
     cameraMatrix.at<double>(0,2) = cameraMatrix.at<double>(0,2)  * (width / 640);
@@ -369,12 +372,14 @@ int main(int argc, char **argv){
     cameraMatrix.at<double>(1,1) = cameraMatrix.at<double>(1,1) * (height / 480);
     cameraMatrix.at<double>(1,2) = cameraMatrix.at<double>(1,2)  * (height / 480);
     */
+   
+
     
-    // Define the dictionary
+    // Define the dictionary, 7X7 Aruco. As I remember, detailed markers have better accuracy.
     Ptr<aruco::Dictionary> dictionary = aruco::getPredefinedDictionary(aruco::PREDEFINED_DICTIONARY_NAME(cv::aruco::DICT_7X7_100));
 
     // detect markers
-    Ptr<aruco::DetectorParameters> params = aruco::DetectorParameters::create();
+    Ptr<aruco::DetectorParameters> params = aruco::DetectorParameters::create(); // You can change the params if you need.
     
     //cerr << "Debug: Starting to infinite." << endl; // debug
 
@@ -390,83 +395,84 @@ int main(int argc, char **argv){
         vector< vector< Point2f > > corners;
         vector< int > ids;
         //cerr << "Trying to detect markers" << endl; // debug
-        aruco::detectMarkers(img, dictionary, corners, ids, params);
+        aruco::detectMarkers(img, dictionary, corners, ids, params); // ArUco marker detection, you can change the params if you want.
 
         //cerr << "Markers are detected, starting pose estimation" << endl; // debug
         Mat invertedTvec;
         if(!ids.empty()){
             cout << "sort" << endl;
-            sortByIds(corners, ids);
-            aruco::drawDetectedMarkers(img, corners, noArray(), Scalar(0,0,250) );
-            //cout << "estimate part" << endl; // debug
-            aruco::estimatePoseSingleMarkers(corners, sideOfTheMarker, cameraMatrix, distCoeffs, rvecs, tvecs);
+            sortByIds(corners, ids); // This part can be unncesessary, as I remember it is coming in a sorted way.
+            aruco::drawDetectedMarkers(img, corners, noArray(), Scalar(0,0,250) ); // Debug
+            aruco::estimatePoseSingleMarkers(corners, sideOfTheMarker, cameraMatrix, distCoeffs, rvecs, tvecs); // Pose estimation
 
             for(int i = 0; i < ids.size(); ++i){
-                aruco::drawAxis(img, cameraMatrix, distCoeffs, rvecs[i], tvecs[i], halfOfTheSideOfTheMarker);
+                aruco::drawAxis(img, cameraMatrix, distCoeffs, rvecs[i], tvecs[i], halfOfTheSideOfTheMarker); // Debug
 
-                Mat homo = getRTMatrix(DoubleMatFromVec3d(rvecs[i]), DoubleMatFromVec3d(tvecs[i]), -1);
-                Mat invertedMat  = homo.inv();
-                invertedTvec = invertedMat.col(3);
-                invertedTvec.pop_back();
+                // Invert to ArUco space
+                Mat homo = getRTMatrix(DoubleMatFromVec3d(rvecs[i]), DoubleMatFromVec3d(tvecs[i]), -1); // Get the homogeneous form
+                Mat invertedMat  = homo.inv(); // Get to ArUco space, thanks to Homogeneous matrix
+                invertedTvec = invertedMat.col(3); // Get the Tvec column
+                invertedTvec.pop_back(); // There reason for pop operation is to remove the 4th element, "1".
 
+                // Get the angles 
                 Vec3d eulerAngles;
                 cv::Mat rotMat = Mat(3,3,CV_64F);
-                cv::Mat tmp = invertedMat(cv::Rect(0,0,3,3));
+                cv::Mat tmp = invertedMat(cv::Rect(0,0,3,3)); // First 3x3 part is rotation matrix, always.
                 tmp.copyTo(rotMat);
-
                 getEulerAngles(rotMat, eulerAngles); 
-                
-                // Multiply with (180.0 / 3.14159) if you want degrees
+
+                // It may be different.
+                // TODO: CHECK IF THE ANGLES ARE IN WRONG PLACES.
                 double pitch   = eulerAngles[0];
                 double roll = eulerAngles[1];
                 double yaw  = eulerAngles[2];
                 
-                // double realY = tvecs[i][1] - atan(pitch / 180.0 * 3.14159) * tvecs[i][2]; 
-                // double realX = tvecs[i][0] - atan(roll / 180.0 * 3.14159) * tvecs[i][2];
-
+                // Debug
                 cout << "For id: " << ids[i] << endl;
                 cout << "yaw: " << yaw << " pitch: " << pitch << " roll: " << roll << endl << endl;
-                cout << invertedMat << endl;
-                // cout << rotMat << endl;
+                // cout << invertedMat << endl;
                 cout << "XYZ: " << invertedTvec << endl;
 
+                // Store the point for further operations.
                 point = Point3d(invertedTvec.at<double>(0),
                 invertedTvec.at<double>(1),
                 invertedTvec.at<double>(2));
-                points.push_back(point);
-                if(++counterPoints == limitPoints) points.pop_front();
-                else if(counterPoints < limitPoints) normalizedCoord = point;
-                else{
-                    double xsum=0, ysum=0, zsum=0;
-                    for(list<Point3d>::iterator it = points.begin(); it != points.end(); ++i){
-                        xsum += it->x;
-                        ysum += it->y;
-                        zsum += it->z;
+
+                points.push_back(point); // Add the new point to the list.
+                if(points.size() == limitPoints+1){
+                    cout <<"First if RULESS" << endl;
+                    points.pop_front(); 
+                    double xavg=0, yavg=0, zavg=0;
+                    for(list<Point3d>::iterator it = points.begin(); it != points.end(); ++it){
+                        xavg += it->x/limitPoints;
+                        yavg += it->y/limitPoints;
+                        zavg += it->z/limitPoints;
                     }
-                    normalizedCoord.x = xsum/counterPoints;
-                    normalizedCoord.x = xsum/counterPoints;
-                    normalizedCoord.x = xsum/counterPoints;
-                }                    
-                draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z);
+                    normalizedCoord.x = xavg;
+                    normalizedCoord.y = yavg;
+                    normalizedCoord.z = zavg;
+                    
+                
+                }// If you got enough points, remove the latest one.
+                else if(points.size() < limitPoints) normalizedCoord = point; // If don't, use the last point. 
+                                  
+                draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z); // Marker location is calculated and normalized, draw the scene.
             }
         } else{
-            draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z);
+            draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z); // No marker detected, draw the same scene.
         }
 
-            
+        // Show the stream
         cv::namedWindow("Stream", cv::WINDOW_NORMAL);
         cv::resizeWindow("Stream", cv::Size(width,height));
         cv::imshow("Stream", img);
 
+        // Get input. You can do whatever want here.
         char key = waitKey(1);
         if(key == 'q')
             break;
-        else if(key == 'p'){
-            cout << "aruco rvec: " << rvecs[0] << endl;
-            cout << "aruco tvec: " << tvecs[0] << endl;
-        }
     }
-
+    // Clean everything
     destroyAllWindows();
     cap.release();
     
