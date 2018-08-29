@@ -1,8 +1,29 @@
+#define _USE_MATH_DEFINES
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/calib3d/calib3d.hpp"
 #include "opencv2/core.hpp"
 #include "opencv2/shape.hpp"
 #include <opencv2/aruco.hpp>
+
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <cstdlib>
+#include <stdlib.h>
+#include <stdio.h>
+#include <boost/tokenizer.hpp>
+#include <sstream>
+#include <vector>
+#include <cmath>
+#include <list>
+
+#include <SDL/SDL.h>
+#include <GL/gl.h>
+#include <GL/glu.h>
+#include <GL/freeglut.h>
+#include <GL/glut.h>
+#include <algorithm>
+
 
 
 #include <math.h>
@@ -29,8 +50,98 @@ const char* keys  =
         "CORNER_REFINE_CONTOUR=2, CORNER_REFINE_APRILTAG=3}";
 }
 
+float xTestVar=0.0f, yTestVar=0.0f, zTestVar=0.0f;
+
 float sideOfTheMarker = 0.2;
 double halfOfTheSideOfTheMarker = sideOfTheMarker/2;
+
+GLfloat mat_specular[] = {1.0, 1.0,1.0,1.0};
+GLfloat mat_shininess[] = {50.0};
+GLfloat light_position[] = {1.0,1.0,1.0,0.0};
+
+void resize(int w, int h)
+{
+    glViewport(0, 0, w, h);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    if (w <= h)
+        glOrtho(-2.0,2.0,-2.0*h/w,2.0*h/w,-10.0,10.0);
+    else
+        glOrtho(-2.0*w/h,2.0*w/h,-2.0,2.0,-10.0,10.0);
+    glMatrixMode(GL_MODELVIEW);
+}
+
+string type2str(int type) {
+  string r;
+
+  uchar depth = type & CV_MAT_DEPTH_MASK;
+  uchar chans = 1 + (type >> CV_CN_SHIFT);
+
+  switch ( depth ) {
+    case CV_8U:  r = "8U"; break;
+    case CV_8S:  r = "8S"; break;
+    case CV_16U: r = "16U"; break;
+    case CV_16S: r = "16S"; break;
+    case CV_32S: r = "32S"; break;
+    case CV_32F: r = "32F"; break;
+    case CV_64F: r = "64F"; break;
+    default:     r = "User"; break;
+  }
+
+  r += "C";
+  r += (chans+'0');
+
+  return r;
+}
+
+
+
+void draw(double x,double y,double z){
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glPushMatrix();
+
+    glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    // gluLookAt(2,3,2,0,0,0,0,0,1);
+    // gluLookAt(0,0,3,0,0,0,0,0,1);
+    gluLookAt(1,2,1,0,0,0,0,0,1);
+    glPointSize(5.0);
+
+    glBegin(GL_LINES);
+    // draw line for x axis
+    glColor3f(1.0, 0.0, 0.0);
+    glVertex3f(0.0, 0.0, 0.0);
+    glVertex3f(1.0, 0.0, 0.0);
+    // draw line for y axis
+    glColor3f(0.0, 1.0, 0.0);
+    glVertex3f(0.0, 0.0, 0.0);
+    glVertex3f(0.0, 1.0, 0.0);
+    // draw line for Z axis
+    glColor3f(0.0, 0.0, 1.0);
+    glVertex3f(0.0, 0.0, 0.0);
+    glVertex3f(0.0, 0.0, 1.0);
+    glEnd();
+
+    glBegin(GL_POINTS);
+    glColor3ub(180,180,180);
+    glVertex3d(x, y, z);
+    //cout << "printed point: " << x << "  " << y << "  " << z << endl;
+    glEnd();
+
+    glFlush();
+    SDL_GL_SwapBuffers();
+
+    glPopMatrix();
+    glPopAttrib();
+}
+
+int counterPoints = 0;
+int limitPoints = 5;
+list<Point3d> points;
+Point3d normalizedCoord;
 
 // Get Mat from 3D vector. 
 cv::Mat DoubleMatFromVec3d(cv::Vec3d in)
@@ -139,15 +250,24 @@ cv::Mat getRTMatrix ( const cv::Mat &R_,const cv::Mat &T_ ,int forceType ) {
 }
 
 
-int main(){
+int main(int argc, char **argv){
     // camera calibration matrix and distortion coefficients
     cv::Mat cameraMatrix = cv::Mat(3,3, CV_64F);
     cv::Mat distCoeffs = cv::Mat(1,4, CV_64F);
     cv::Mat rotationMatrix = cv::Mat(3,3, CV_64F);
     cv::Mat translationVector = cv::Mat(1,3, CV_64F);
 
+    SDL_Init(SDL_INIT_VIDEO);
+    atexit(SDL_Quit);
+    SDL_WM_SetCaption("Point Cloud", NULL);
+    SDL_SetVideoMode(640,480, 32, SDL_OPENGL);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(70,(double)640/480,1,1000);
+
     // camera
-    VideoCapture cap(1);
+    VideoCapture cap(0);
 
     int width = 640, height = 480;
 
@@ -171,9 +291,7 @@ int main(){
     distCoeffs.at<double>(0,2) = -5.6353742972864032e-03; 
     distCoeffs.at<double>(0,3) = -4.4143095826370313e-02;
     distCoeffs.at<double>(0,4) = -5.3672160799182489e-01; 
-    */
-  
-    /*
+    
     //Left Camera
     cameraMatrix.at<double>(0,0) = 2.8831113489990753e+02; //2.8472479568921011e+02
     cameraMatrix.at<double>(0,1) = 0.;
@@ -190,9 +308,7 @@ int main(){
     distCoeffs.at<double>(0,2) = 2.5903170293088386e-04; //-4.8588171299185535e-04
     distCoeffs.at<double>(0,3) = -1.0025396099026702e-04; //2.7179556321942192e-04
     distCoeffs.at<double>(0,4) = -2.2112880530223068e-02; //-6.5477129929546005e-02
-    */
-
-    /*
+    
     //Right Camera
     cameraMatrix.at<double>(0,0) = 2.8772691423906861e+02;
     cameraMatrix.at<double>(0,1) = 0.;
@@ -260,9 +376,10 @@ int main(){
     // detect markers
     Ptr<aruco::DetectorParameters> params = aruco::DetectorParameters::create();
     
-    cerr << "Debug: Starting to infinite." << endl; // debug
+    //cerr << "Debug: Starting to infinite." << endl; // debug
 
     vector< Vec3d > rvecs, tvecs;
+    Point3d point;
     while(true){
         Mat img;
         if(!cap.read(img)){
@@ -272,15 +389,16 @@ int main(){
 
         vector< vector< Point2f > > corners;
         vector< int > ids;
-        cerr << "Trying to detect markers" << endl; // debug
+        //cerr << "Trying to detect markers" << endl; // debug
         aruco::detectMarkers(img, dictionary, corners, ids, params);
 
-        cerr << "Markers are detected, starting pose estimation" << endl; // debug
+        //cerr << "Markers are detected, starting pose estimation" << endl; // debug
+        Mat invertedTvec;
         if(!ids.empty()){
             cout << "sort" << endl;
             sortByIds(corners, ids);
             aruco::drawDetectedMarkers(img, corners, noArray(), Scalar(0,0,250) );
-            cout << "estimate part" << endl; // debug
+            //cout << "estimate part" << endl; // debug
             aruco::estimatePoseSingleMarkers(corners, sideOfTheMarker, cameraMatrix, distCoeffs, rvecs, tvecs);
 
             for(int i = 0; i < ids.size(); ++i){
@@ -288,7 +406,7 @@ int main(){
 
                 Mat homo = getRTMatrix(DoubleMatFromVec3d(rvecs[i]), DoubleMatFromVec3d(tvecs[i]), -1);
                 Mat invertedMat  = homo.inv();
-                Mat invertedTvec = invertedMat.col(3);
+                invertedTvec = invertedMat.col(3);
                 invertedTvec.pop_back();
 
                 Vec3d eulerAngles;
@@ -303,23 +421,43 @@ int main(){
                 double roll = eulerAngles[1];
                 double yaw  = eulerAngles[2];
                 
-                double realY = tvecs[i][1] - atan(pitch / 180.0 * 3.14159) * tvecs[i][2]; 
-                double realX = tvecs[i][0] - atan(roll / 180.0 * 3.14159) * tvecs[i][2];
+                // double realY = tvecs[i][1] - atan(pitch / 180.0 * 3.14159) * tvecs[i][2]; 
+                // double realX = tvecs[i][0] - atan(roll / 180.0 * 3.14159) * tvecs[i][2];
 
                 cout << "For id: " << ids[i] << endl;
                 cout << "yaw: " << yaw << " pitch: " << pitch << " roll: " << roll << endl << endl;
-                // cout << invertedMat << endl;
+                cout << invertedMat << endl;
                 // cout << rotMat << endl;
                 cout << "XYZ: " << invertedTvec << endl;
 
+                point = Point3d(invertedTvec.at<double>(0),
+                invertedTvec.at<double>(1),
+                invertedTvec.at<double>(2));
+                points.push_back(point);
+                if(++counterPoints == limitPoints) points.pop_front();
+                else if(counterPoints < limitPoints) normalizedCoord = point;
+                else{
+                    double xsum=0, ysum=0, zsum=0;
+                    for(list<Point3d>::iterator it = points.begin(); it != points.end(); ++i){
+                        xsum += it->x;
+                        ysum += it->y;
+                        zsum += it->z;
+                    }
+                    normalizedCoord.x = xsum/counterPoints;
+                    normalizedCoord.x = xsum/counterPoints;
+                    normalizedCoord.x = xsum/counterPoints;
+                }                    
+                draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z);
             }
-            
+        } else{
+            draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z);
         }
+
             
         cv::namedWindow("Stream", cv::WINDOW_NORMAL);
         cv::resizeWindow("Stream", cv::Size(width,height));
         cv::imshow("Stream", img);
-        
+
         char key = waitKey(1);
         if(key == 'q')
             break;
@@ -329,8 +467,10 @@ int main(){
         }
     }
 
-    cap.release();
     destroyAllWindows();
+    cap.release();
+    
+    
 
     return 0;
 }

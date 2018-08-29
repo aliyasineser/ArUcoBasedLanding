@@ -34,6 +34,8 @@
 *.exe
 *.out
 *.app
+calibrate
+calibration
 
 ### OpenCV ###
 #OpenCV for Mac and Linux
@@ -49,6 +51,14 @@
 calib_images/*
 left/*
 right/*
+
+### VisualStudioCode ###
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
 
 
 # End of https://www.gitignore.io/api/c++,opencv
