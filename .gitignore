@@ -60,6 +60,12 @@ right/*
 !.vscode/launch.json
 !.vscode/extensions.json
 
+### Videos
+*.avi
+
+### Data storage files
+*.yml
+*.json
 
 
 # End of https://www.gitignore.io/api/c++,opencv

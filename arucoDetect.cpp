@@ -1,34 +1,36 @@
 #define _USE_MATH_DEFINES
+// OpenCV libraries
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/calib3d/calib3d.hpp"
 #include "opencv2/core.hpp"
 #include "opencv2/shape.hpp"
 #include <opencv2/aruco.hpp>
 
+// Std libraries
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <cstdlib>
-#include <stdlib.h>
 #include <stdio.h>
-#include <boost/tokenizer.hpp>
 #include <sstream>
 #include <vector>
 #include <cmath>
 #include <list>
+#include <ctime>
+#include <signal.h>
+#include <algorithm>
+#include <math.h>
+#include <iostream>
+#include <unistd.h>
 
+// Graphical libraries
 #include <SDL/SDL.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
 #include <GL/freeglut.h>
 #include <GL/glut.h>
-#include <algorithm>
 
-
-
-#include <math.h>
-#include <iostream>
-
+//Namespaces
 using namespace std;
 using namespace cv;
 
@@ -50,6 +52,10 @@ const char* keys  =
         "CORNER_REFINE_CONTOUR=2, CORNER_REFINE_APRILTAG=3}";
 }
 
+// Hyperparameter
+// Single board like rasperry or odroid
+bool isSingleBoard = true;
+
 // Debug.
 float xTestVar=0.0f, yTestVar=0.0f, zTestVar=0.0f;
 
@@ -65,6 +71,18 @@ GLfloat light_position[] = {1.0,1.0,1.0,0.0};
 int limitPoints = 7;  // Store limit, change to desired. 
 list<Point3d> points; // Container for points. List is used because easy to add and removal from both sides.
 Point3d normalizedCoord; // Only normalized version will be drawn in OpenGL. If no marker detected, draw the last point.
+
+// camera
+VideoCapture cap(1);
+
+//Signal handling for SIGINT ( CTRL + C )
+void my_handler(int s){
+    if(!isSingleBoard)
+        destroyAllWindows();
+    cap.release(); // opencv camera release
+    SDL_Quit(); // OpenGL release
+    exit(0); 
+}
 
 
 void resize(int w, int h)
@@ -102,7 +120,6 @@ string type2str(int type) {
   return r;
 }
 
-
 // Draw OpenGL scene.
 void draw(double x,double y,double z){
     glPushAttrib(GL_ALL_ATTRIB_BITS);
@@ -115,7 +132,7 @@ void draw(double x,double y,double z){
 
     // gluLookAt(2,3,2,0,0,0,0,0,1);
     // gluLookAt(0,0,3,0,0,0,0,0,1);
-    gluLookAt(1,2,1,0,0,0,0,0,1); // Perspective
+    gluLookAt(2,2.5,2,0,0,0,0,0,1); // Perspective
     glPointSize(5.0);
 
     // Draw xyz axis so you can know where you are
@@ -146,9 +163,6 @@ void draw(double x,double y,double z){
     glPopMatrix();
     glPopAttrib();
 }
-
-
-
 
 // Get Mat from 3D vector. 
 cv::Mat DoubleMatFromVec3d(cv::Vec3d in)
@@ -257,23 +271,31 @@ int main(int argc, char **argv){
 
     int width = 640, height = 480; // Change as you desire, care that most of the cameras are not supporting all ratios!
 
+    VideoWriter opencv_video("opencvOut.avi",CV_FOURCC('M','J','P','G'),30, Size(width,height));
+    VideoWriter opengl_video("openglOut.avi",CV_FOURCC('M','J','P','G'),30, Size(width,height));
+
+    // Signal is needed because capture should be released in any case.
+    struct sigaction sigIntHandler;
+
+    sigIntHandler.sa_handler = my_handler;
+    sigemptyset(&sigIntHandler.sa_mask);
+    sigIntHandler.sa_flags = 0;
+    sigaction(SIGINT, &sigIntHandler, NULL);
+
     // OpenGL initiation part!
     SDL_Init(SDL_INIT_VIDEO);
     atexit(SDL_Quit);
     SDL_WM_SetCaption("Point Cloud", NULL);
-    SDL_SetVideoMode(width,height, 32, SDL_OPENGL); // 
+    if(!isSingleBoard)
+        SDL_SetVideoMode(width,height, 32, SDL_OPENGL); 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     gluPerspective(70,(double)640/480,1,1000);
-
-    // camera
-    VideoCapture cap(1);
-
     
     // Set the resolution. Camera should support the resolution and you need to multiply your camera matrix with the ratio. 
     cap.set(CV_CAP_PROP_FRAME_WIDTH,width);
     cap.set(CV_CAP_PROP_FRAME_HEIGHT,height);
-
+    
     /*********************************CAMERA CALIBRATION PARAMETERS********************************************/
     /*
     //Yasin lap top camera
@@ -362,7 +384,6 @@ int main(int argc, char **argv){
     distCoeffs.at<double>(0,4) = -3.0666278646347642e+00;
     /*****************************************************************************/
 
-
     /*   If you changed your resolution, you need to multiply your camera matrix with the ratio!
     cameraMatrix.at<double>(0,0) = cameraMatrix.at<double>(0,0) * (width / 640);
     cameraMatrix.at<double>(0,1) = cameraMatrix.at<double>(0,1)  * (width / 640);
@@ -373,16 +394,18 @@ int main(int argc, char **argv){
     cameraMatrix.at<double>(1,2) = cameraMatrix.at<double>(1,2)  * (height / 480);
     */
    
-
-    
     // Define the dictionary, 7X7 Aruco. As I remember, detailed markers have better accuracy.
     Ptr<aruco::Dictionary> dictionary = aruco::getPredefinedDictionary(aruco::PREDEFINED_DICTIONARY_NAME(cv::aruco::DICT_7X7_100));
 
     // detect markers
     Ptr<aruco::DetectorParameters> params = aruco::DetectorParameters::create(); // You can change the params if you need.
-    
-    //cerr << "Debug: Starting to infinite." << endl; // debug
 
+    // Variables to calculate fps
+    long long int frameCounter = 0;
+    int tick = 0;
+    int fps;
+    std::time_t timeBegin = std::time(0); // start the time
+    cout <<"|||||" << endl;
     vector< Vec3d > rvecs, tvecs;
     Point3d point;
     while(true){
@@ -390,6 +413,17 @@ int main(int argc, char **argv){
         if(!cap.read(img)){
             cerr << "Video camera is not working at the moment. Capture Error!" << endl;
             exit(1);
+        }
+
+        frameCounter++; 
+
+        std::time_t timeNow = std::time(0) - timeBegin; // should we update?
+
+        if (timeNow - tick >= 1) // yes
+        {
+            tick++;
+            fps = frameCounter;
+            frameCounter = 0;
         }
 
         vector< vector< Point2f > > corners;
@@ -400,7 +434,6 @@ int main(int argc, char **argv){
         //cerr << "Markers are detected, starting pose estimation" << endl; // debug
         Mat invertedTvec;
         if(!ids.empty()){
-            cout << "sort" << endl;
             sortByIds(corners, ids); // This part can be unncesessary, as I remember it is coming in a sorted way.
             aruco::drawDetectedMarkers(img, corners, noArray(), Scalar(0,0,250) ); // Debug
             aruco::estimatePoseSingleMarkers(corners, sideOfTheMarker, cameraMatrix, distCoeffs, rvecs, tvecs); // Pose estimation
@@ -440,7 +473,6 @@ int main(int argc, char **argv){
 
                 points.push_back(point); // Add the new point to the list.
                 if(points.size() == limitPoints+1){
-                    cout <<"First if RULESS" << endl;
                     points.pop_front(); 
                     double xavg=0, yavg=0, zavg=0;
                     for(list<Point3d>::iterator it = points.begin(); it != points.end(); ++it){
@@ -462,21 +494,39 @@ int main(int argc, char **argv){
             draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z); // No marker detected, draw the same scene.
         }
 
-        // Show the stream
-        cv::namedWindow("Stream", cv::WINDOW_NORMAL);
-        cv::resizeWindow("Stream", cv::Size(width,height));
-        cv::imshow("Stream", img);
+        cv::putText(img, cv::format("Average FPS=%d",fps), cv::Point(30, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0,0,255), 2);
+        // Save frame for openGL video
+        cv::Mat pixels( height, width, CV_8UC3 );
+        glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data );
+        cv::Mat cv_pixels( height, width, CV_8UC3 );
+        for( int y=0; y<height; y++ ) for( int x=0; x<width; x++ ) 
+        {
+            cv_pixels.at<cv::Vec3b>(y,x)[2] = pixels.at<cv::Vec3b>(height-y-1,x)[0];
+            cv_pixels.at<cv::Vec3b>(y,x)[1] = pixels.at<cv::Vec3b>(height-y-1,x)[1];
+            cv_pixels.at<cv::Vec3b>(y,x)[0] = pixels.at<cv::Vec3b>(height-y-1,x)[2];
+        }
+        opengl_video << cv_pixels;
+        opencv_video << img; // Save fram for openCV video
 
+        // Show the stream
+        if(!isSingleBoard){
+            cv::namedWindow("Stream", cv::WINDOW_NORMAL);
+            cv::resizeWindow("Stream", width, height);
+            cv::imshow("Stream", img);
+        }
+        cout <<"|||||" << endl;
         // Get input. You can do whatever want here.
         char key = waitKey(1);
         if(key == 'q')
             break;
     }
     // Clean everything
-    destroyAllWindows();
-    cap.release();
+    if(!isSingleBoard)
+        destroyAllWindows();
+    cap.release(); // in any case
+    SDL_Quit();
+    opencv_video.release();
+    opengl_video.release();
     
-    
-
     return 0;
 }
