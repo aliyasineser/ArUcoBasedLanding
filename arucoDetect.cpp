@@ -55,9 +55,8 @@ const char* keys  =
 // Hyperparameter
 // Single board like rasperry or odroid
 bool isSingleBoard = true;
-
-// Debug.
-float xTestVar=0.0f, yTestVar=0.0f, zTestVar=0.0f;
+bool saveOpenGLVideo = true;
+bool saveOpenCVVideo = true;
 
 // Side of the marker, hyperparameter!
 float sideOfTheMarker = 0.2;
@@ -73,14 +72,14 @@ list<Point3d> points; // Container for points. List is used because easy to add 
 Point3d normalizedCoord; // Only normalized version will be drawn in OpenGL. If no marker detected, draw the last point.
 
 // camera
-VideoCapture cap(1);
+VideoCapture cap;
 
 //Signal handling for SIGINT ( CTRL + C )
 void my_handler(int s){
     if(!isSingleBoard)
         destroyAllWindows();
     cap.release(); // opencv camera release
-    SDL_Quit(); // OpenGL release
+    //SDL_Quit(); // OpenGL release
     exit(0); 
 }
 
@@ -96,6 +95,7 @@ void resize(int w, int h)
         glOrtho(-2.0*w/h,2.0*w/h,-2.0,2.0,-10.0,10.0);
     glMatrixMode(GL_MODELVIEW);
 }
+
 // Find the mat type. Give the object.type() to use. For debug.
 string type2str(int type) {
   string r;
@@ -130,8 +130,6 @@ void draw(double x,double y,double z){
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
-    // gluLookAt(2,3,2,0,0,0,0,0,1);
-    // gluLookAt(0,0,3,0,0,0,0,0,1);
     gluLookAt(2,2.5,2,0,0,0,0,0,1); // Perspective
     glPointSize(5.0);
 
@@ -154,11 +152,12 @@ void draw(double x,double y,double z){
     // Draw the desired point.
     glBegin(GL_POINTS);
     glColor3ub(180,180,180); // Almost white
-    glVertex3d(x, y, z);
+    glVertex3d(x,y,z);
     glEnd();
 
     glFlush();
-    SDL_GL_SwapBuffers();
+    if(!isSingleBoard)
+        SDL_GL_SwapBuffers();
 
     glPopMatrix();
     glPopAttrib();
@@ -271,23 +270,41 @@ int main(int argc, char **argv){
 
     int width = 640, height = 480; // Change as you desire, care that most of the cameras are not supporting all ratios!
 
-    VideoWriter opencv_video("opencvOut.avi",CV_FOURCC('M','J','P','G'),30, Size(width,height));
-    VideoWriter opengl_video("openglOut.avi",CV_FOURCC('M','J','P','G'),30, Size(width,height));
+    VideoWriter opencv_video;
+    VideoWriter opengl_video;
 
-    // Signal is needed because capture should be released in any case.
+    if(!isSingleBoard){
+        if(saveOpenCVVideo)
+            opencv_video = VideoWriter("opencvOut.avi",CV_FOURCC('M','J','P','G'),30, Size(width,height));
+        if(saveOpenGLVideo)
+            opengl_video = VideoWriter("openglOut.avi",CV_FOURCC('M','J','P','G'),30, Size(width,height));
+    }else{
+        if(saveOpenCVVideo)
+            opencv_video = VideoWriter("opencvOut.avi",CV_FOURCC('M','J','P','G'), 10, Size(width,height));
+        if(saveOpenGLVideo)
+            opengl_video = VideoWriter("openglOut.avi",CV_FOURCC('M','J','P','G'), 10, Size(width,height));
+    }
+    
+    if(!isSingleBoard)
+        cap = VideoCapture(1); // Lap tops have built-in camera. If you have additional one like me, it may be 1. For built-in, mostly it is 0
+    else
+        cap = VideoCapture(0); // For singleBoard pc, you can list your cameras with v4l2 and use the one the needed. Mine is 2 at the moment.
+
+    // Signal is needed because capture should be released in any case. I use sigint for closing, I handled it.
     struct sigaction sigIntHandler;
-
     sigIntHandler.sa_handler = my_handler;
     sigemptyset(&sigIntHandler.sa_mask);
     sigIntHandler.sa_flags = 0;
     sigaction(SIGINT, &sigIntHandler, NULL);
 
     // OpenGL initiation part!
-    SDL_Init(SDL_INIT_VIDEO);
-    atexit(SDL_Quit);
-    SDL_WM_SetCaption("Point Cloud", NULL);
-    if(!isSingleBoard)
+    if(!isSingleBoard){
+        SDL_Init(SDL_INIT_VIDEO);
+        atexit(SDL_Quit);
+        SDL_WM_SetCaption("Point Cloud", NULL);
         SDL_SetVideoMode(width,height, 32, SDL_OPENGL); 
+    }
+
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     gluPerspective(70,(double)640/480,1,1000);
@@ -405,7 +422,6 @@ int main(int argc, char **argv){
     int tick = 0;
     int fps;
     std::time_t timeBegin = std::time(0); // start the time
-    cout <<"|||||" << endl;
     vector< Vec3d > rvecs, tvecs;
     Point3d point;
     while(true){
@@ -428,10 +444,8 @@ int main(int argc, char **argv){
 
         vector< vector< Point2f > > corners;
         vector< int > ids;
-        //cerr << "Trying to detect markers" << endl; // debug
         aruco::detectMarkers(img, dictionary, corners, ids, params); // ArUco marker detection, you can change the params if you want.
 
-        //cerr << "Markers are detected, starting pose estimation" << endl; // debug
         Mat invertedTvec;
         if(!ids.empty()){
             sortByIds(corners, ids); // This part can be unncesessary, as I remember it is coming in a sorted way.
@@ -443,7 +457,7 @@ int main(int argc, char **argv){
 
                 // Invert to ArUco space
                 Mat homo = getRTMatrix(DoubleMatFromVec3d(rvecs[i]), DoubleMatFromVec3d(tvecs[i]), -1); // Get the homogeneous form
-                Mat invertedMat  = homo.inv(); // Get to ArUco space, thanks to Homogeneous matrix
+                Mat invertedMat = homo.inv(); // Get to ArUco space, thanks to Homogeneous matrix
                 invertedTvec = invertedMat.col(3); // Get the Tvec column
                 invertedTvec.pop_back(); // There reason for pop operation is to remove the 4th element, "1".
 
@@ -484,49 +498,56 @@ int main(int argc, char **argv){
                     normalizedCoord.y = yavg;
                     normalizedCoord.z = zavg;
                     
-                
-                }// If you got enough points, remove the latest one.
-                else if(points.size() < limitPoints) normalizedCoord = point; // If don't, use the last point. 
-                                  
+                }else if(points.size() < limitPoints) normalizedCoord = point; // If don't, use the last point.  
+
                 draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z); // Marker location is calculated and normalized, draw the scene.
             }
         } else{
             draw(normalizedCoord.x, normalizedCoord.y, normalizedCoord.z); // No marker detected, draw the same scene.
         }
 
+        // draw fps to image
         cv::putText(img, cv::format("Average FPS=%d",fps), cv::Point(30, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0,0,255), 2);
-        // Save frame for openGL video
-        cv::Mat pixels( height, width, CV_8UC3 );
-        glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data );
-        cv::Mat cv_pixels( height, width, CV_8UC3 );
-        for( int y=0; y<height; y++ ) for( int x=0; x<width; x++ ) 
-        {
-            cv_pixels.at<cv::Vec3b>(y,x)[2] = pixels.at<cv::Vec3b>(height-y-1,x)[0];
-            cv_pixels.at<cv::Vec3b>(y,x)[1] = pixels.at<cv::Vec3b>(height-y-1,x)[1];
-            cv_pixels.at<cv::Vec3b>(y,x)[0] = pixels.at<cv::Vec3b>(height-y-1,x)[2];
+        
+        if(saveOpenCVVideo) // Save fram for openCV video
+            opencv_video << img; 
+
+        if(saveOpenGLVideo){ // Save frame for openGL video
+            cv::Mat pixels( height, width, CV_8UC3 );
+            glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data );
+            cv::Mat cv_pixels( height, width, CV_8UC3 );
+            for( int y=0; y<height; y++ ) for( int x=0; x<width; x++ ) 
+            {
+                cv_pixels.at<cv::Vec3b>(y,x)[2] = pixels.at<cv::Vec3b>(height-y-1,x)[0];
+                cv_pixels.at<cv::Vec3b>(y,x)[1] = pixels.at<cv::Vec3b>(height-y-1,x)[1];
+                cv_pixels.at<cv::Vec3b>(y,x)[0] = pixels.at<cv::Vec3b>(height-y-1,x)[2];
+            }
+            opengl_video << cv_pixels; 
         }
-        opengl_video << cv_pixels;
-        opencv_video << img; // Save fram for openCV video
 
         // Show the stream
         if(!isSingleBoard){
             cv::namedWindow("Stream", cv::WINDOW_NORMAL);
             cv::resizeWindow("Stream", width, height);
             cv::imshow("Stream", img);
+        
+            // Get input. You can do whatever want here.
+            char key = waitKey(1);
+            if(key == 'q')
+                break;
         }
-        cout <<"|||||" << endl;
-        // Get input. You can do whatever want here.
-        char key = waitKey(1);
-        if(key == 'q')
-            break;
     }
     // Clean everything
     if(!isSingleBoard)
         destroyAllWindows();
     cap.release(); // in any case
-    SDL_Quit();
-    opencv_video.release();
-    opengl_video.release();
+    if(!isSingleBoard)
+        SDL_Quit();  
+    
+    if(saveOpenCVVideo)
+        opencv_video.release();
+    if(saveOpenGLVideo)
+        opengl_video.release();
     
     return 0;
 }
